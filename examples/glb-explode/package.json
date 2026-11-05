@@ -1,0 +1,31 @@
+{
+  "name": "glb-explode",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "fetch-assets": "node scripts/fetch-assets.mjs",
+    "verify-assets": "node scripts/verify-assets.mjs",
+    "smoke": "node scripts/render-smoke.mjs 0 3",
+    "render": "open-motion render -u http://localhost:5173 -o out.mp4 --composition glb-explode --public-dir ./public"
+  },
+  "dependencies": {
+    "@open-motion/cli": "file:../../packages/cli",
+    "@open-motion/core": "workspace:*",
+    "@open-motion/renderer": "file:../../packages/renderer",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "three": "^0.182.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
+    "@types/three": "^0.182.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
+  }
+}

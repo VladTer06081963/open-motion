@@ -1,0 +1,17 @@
+{
+  "assets": [
+    {
+      "path": "/models/s1045_lod3.glb",
+      "file": "public/models/s1045_lod3.glb",
+      "sha256": "c2f7850622b4309bf716df6fe464416fc63a7733cea35e74210ee0a3d8aa0778",
+      "bytes": 265296,
+      "source": "https://huggingface.co/datasets/codepawl/ct-anatomy-glb/resolve/main/lods/s1045_lod3.glb",
+      "origin": "TotalSegmentator v2.0.1 (Zenodo 10047292) — 117 anatomical structures in 1228 CT images",
+      "author": "Jakob Wasserthal, Research and Analysis dept., University Hospital Basel",
+      "license": "CC BY 4.0",
+      "attribution": "CT data: TotalSegmentator (University Hospital Basel), CC BY 4.0. Conversion to GLB: codepawl/ct-anatomy-glb.",
+      "compression": "EXT_meshopt_compression + KHR_mesh_quantization",
+      "note": "Decoded in the browser by three/addons/libs/meshopt_decoder.module.js — one extra line in the loader."
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import {
   useCurrentFrame,
   useVideoConfig,
@@ -11,9 +11,19 @@ import {
   SubtitleItem
 } from '@open-motion/core';
 import * as THREE from 'three';
+import { ThreeContext } from './three-context';
+
+export * from './three-context';
+export * from './explode';
+export * from './glb';
+export * from './recipe';
+export * from './lights';
 
 /**
  * ThreeCanvas Component: Integrates Three.js with OpenMotion's frame system.
+ *
+ * Children (Glb, Explode, Cutaway, Labels) are rendered inside the canvas
+ * container and receive the live scene/camera/renderer through context.
  */
 export const ThreeCanvas: React.FC<{
   width: number;
@@ -21,18 +31,32 @@ export const ThreeCanvas: React.FC<{
   renderScene: (scene: THREE.Scene, camera: THREE.Camera, frame: number) => void;
   init?: (scene: THREE.Scene, camera: THREE.Camera) => void;
   style?: React.CSSProperties;
-}> = ({ width, height, renderScene, init, style }) => {
+  /**
+   * Device pixel ratio. Defaults to 1 so that renders are byte-identical
+   * across machines (a Retina laptop would otherwise render 4x the pixels).
+   */
+  pixelRatio?: number;
+  children?: React.ReactNode;
+}> = ({ width, height, renderScene, init, style, pixelRatio = 1, children }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const frame = useCurrentFrame();
+  const [renderTick, setRenderTick] = useState(0);
+
+  /**
+   * Children can mutate the scene outside of a frame change (a GLB that
+   * finished loading, an effect that applied new transforms). They call
+   * invalidate() so the canvas is redrawn instead of staying blank.
+   */
+  const invalidate = useCallback(() => setRenderTick((tick) => tick + 1), []);
 
   const { scene, camera, renderer } = useMemo(() => {
     const s = new THREE.Scene();
     const c = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
     const r = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     r.setSize(width, height);
-    r.setPixelRatio(window.devicePixelRatio);
+    r.setPixelRatio(pixelRatio);
     return { scene: s, camera: c, renderer: r };
-  }, [width, height]);
+  }, [width, height, pixelRatio]);
 
   useEffect(() => {
     if (containerRef.current) {
@@ -50,9 +74,15 @@ export const ThreeCanvas: React.FC<{
   useEffect(() => {
     renderScene(scene, camera, frame);
     renderer.render(scene, camera);
-  }, [frame, renderScene, scene, camera, renderer]);
+  }, [frame, renderScene, scene, camera, renderer, renderTick]);
 
-  return <div ref={containerRef} style={{ width, height, ...style }} />;
+  return (
+    <ThreeContext.Provider value={{ scene, camera, renderer, width, height, invalidate }}>
+      <div ref={containerRef} style={{ width, height, position: 'relative', ...style }}>
+        {children}
+      </div>
+    </ThreeContext.Provider>
+  );
 };
 
 /**
@@ -203,7 +233,7 @@ export const TikTokCaption: React.FC<{
  * based on their duration.
  */
 export const Series: React.FC<{
-  children: React.ReactElement<{ durationInFrames: number }>[];
+  children: React.ReactElement<{ durationInFrames: number; children?: React.ReactNode }>[];
 }> = ({ children }) => {
   let currentFrom = 0;
 
