@@ -1,0 +1,154 @@
+<!doctype html>
+<!--
+  Port probe: our GLB explode pipeline inside HyperFrames.
+  - meshopt-compressed GLB (EXT_meshopt_compression) loaded through GLTFLoader + MeshoptDecoder
+  - named mesh nodes = parts; explode = pure function of time
+  - rendered through a paused GSAP clock, so every frame is render(t)
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: #05070d; }
+      #stage { position: relative; width: 1920px; height: 1080px; }
+      canvas { display: block; }
+      .label { position: absolute; transform: translate(-50%, -50%); color: #e8ecf5;
+               font: 500 22px/1.2 sans-serif; letter-spacing: 0.01em; white-space: nowrap;
+               text-shadow: 0 1px 4px rgba(0,0,0,0.9); }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="6"
+         data-width="1920" data-height="1080">
+      <div id="stage"><canvas id="c"></canvas></div>
+    </div>
+
+    <script>
+      (function () {
+        var clock = { t: 0 };
+        var scene = { clock: clock, render: null, ready: null };
+        window.__glbExplode = scene;
+        window.__hf = window.__hf || {};
+        window.__hf.buildReady = window.__hf.buildReady || {};
+        window.__hf.buildReady["main"] = new Promise(function (resolve) { scene.ready = resolve; });
+
+        var tl = gsap.timeline({ paused: true });
+        tl.to(clock, {
+          t: 6,
+          duration: 6,
+          ease: "none",
+          onUpdate: function () { if (scene.render) scene.render(clock.t); }
+        });
+        window.__timelines = window.__timelines || {};
+        window.__timelines["main"] = tl;
+      })();
+    </script>
+
+    <script type="module">
+      import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.184.0/+esm";
+      import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/loaders/GLTFLoader.js/+esm";
+      import { MeshoptDecoder } from "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/libs/meshopt_decoder.module.js/+esm";
+
+      const host = window.__glbExplode;
+      const canvas = document.getElementById("c");
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+      renderer.setPixelRatio(1);
+      renderer.setSize(1920, 1080, false);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.localClippingEnabled = true;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x05070d);
+      const camera = new THREE.PerspectiveCamera(38, 1920 / 1080, 0.01, 1000);
+
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x1b2333, 1.6));
+      const key = new THREE.DirectionalLight(0xffffff, 2.2);
+      key.position.set(-2, 4, 3);
+      scene.add(key);
+
+      const loader = new GLTFLoader();
+      loader.setMeshoptDecoder(MeshoptDecoder);
+
+      const gltf = await loader.loadAsync("assets/s1045_lod3.glb");
+      const root = gltf.scene;
+      scene.add(root);
+
+      // Named mesh nodes are the parts.
+      const parts = [];
+      root.updateMatrixWorld(true);
+      root.traverse((node) => {
+        if (node.isMesh && node.name) {
+          const box = new THREE.Box3().setFromObject(node);
+          const center = box.getCenter(new THREE.Vector3());
+          parts.push({ node, center, base: node.position.clone(), radius: box.getSize(new THREE.Vector3()).length() / 2 });
+        }
+      });
+
+      // Explode field: radial from the centroid, distance proportional to radius,
+      // delay by radius so the outer parts leave first.
+      const centroid = new THREE.Vector3();
+      parts.forEach((p) => centroid.add(p.center));
+      centroid.multiplyScalar(1 / Math.max(1, parts.length));
+      const maxRadius = Math.max(...parts.map((p) => p.center.distanceTo(centroid)));
+
+      function easeInOutCubic(x) {
+        return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+      }
+
+      function explode(t) {
+        // 0.5 s of hold, 1.5 s of explode, 4 s of exploded hold.
+        const raw = Math.min(1, Math.max(0, (t - 0.5) / 1.5));
+        parts.forEach((p) => {
+          const dir = p.center.clone().sub(centroid);
+          const len = dir.length();
+          const dist = 1.1 * Math.max(len, 0.15 * maxRadius);
+          const delay = 0.25 * (len / Math.max(maxRadius, 1e-6));
+          const k = easeInOutCubic(Math.min(1, Math.max(0, (raw - delay) / Math.max(1e-6, 1 - delay))));
+          if (len > 1e-6) dir.multiplyScalar(1 / len);
+          p.node.position.copy(p.base).addScaledVector(dir, dist * k);
+        });
+      }
+
+      // Camera fit: frame the whole bbox.
+      const box = new THREE.Box3().setFromObject(root);
+      const sphere = box.getBoundingSphere(new THREE.Sphere());
+      const fov = (camera.fov * Math.PI) / 180;
+      const distance = (sphere.radius * 1.25) / Math.sin(fov / 2);
+      camera.position.copy(sphere.center).add(new THREE.Vector3(distance * 0.55, distance * 0.35, distance * 0.75));
+      camera.lookAt(sphere.center);
+      camera.updateMatrixWorld();
+
+      const labels = document.createElement("div");
+      const stage = document.getElementById("stage");
+      const labelEls = [];
+      ["brain", "spinal_cord", "aorta", "liver", "stomach", "femur_left", "femur_right"].forEach((name) => {
+        const part = parts.find((p) => p.node.name === name);
+        if (!part) return;
+        const el = document.createElement("div");
+        el.className = "label";
+        el.textContent = name.replace(/_/g, " ");
+        stage.appendChild(el);
+        labelEls.push({ el, part });
+      });
+
+      const v = new THREE.Vector3();
+      host.render = function (t) {
+        explode(t);
+        renderer.render(scene, camera);
+        labelEls.forEach(({ el, part }) => {
+          part.node.getWorldPosition(v);
+          v.project(camera);
+          el.style.left = `${((v.x + 1) / 2) * 1920}px`;
+          el.style.top = `${((1 - v.y) / 2) * 1080}px`;
+          el.style.opacity = t > 1.2 ? "1" : "0";
+        });
+      };
+      host.render(0);
+
+      await renderer.compileAsync(scene, camera);
+      host.ready();
+    </script>
+  </body>
+</html>
