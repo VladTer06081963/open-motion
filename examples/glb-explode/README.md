@@ -84,3 +84,32 @@ build and the same GPU backend.
 | `scripts/debug-scene.mjs` | Opens the page and reports console output, WebGL backend and scene stats |
 | `scripts/verify-assets.mjs` | Checks the manifest hashes |
 | `scripts/fetch-assets.mjs` | Downloads the assets from the manifest and verifies them |
+| `scripts/glb-inventory.mjs` | Scans a Hugging Face dataset of GLB files and reports how many named parts each asset actually has |
+
+## Asset inventory
+
+Before you promise "any object comes apart", check what the asset really
+contains. `glb-inventory.mjs` reads only the JSON chunk of each GLB (the binary
+buffer is never decoded) and reports the number of named mesh nodes — that is
+the number of parts the explode workflow can move.
+
+```bash
+node scripts/glb-inventory.mjs --repo codepawl/scanned-objects-glb --manifest --sample 12
+node scripts/glb-inventory.mjs --repo codepawl/ct-anatomy-glb --manifest --sample 7
+```
+
+Measured on the public catalogs (2026-11-05):
+
+| Dataset | Files | Named mesh nodes per asset | Usable for explode |
+| --- | --- | --- | --- |
+| `codepawl/scanned-objects-glb` | 1033 | 1 (single mesh) | no — cutaway only |
+| `codepawl/abo-glb` | 7953 | 1 (single mesh) | no — cutaway only |
+| `codepawl/ct-anatomy-glb` | 27 | 113–115 (semantic organs) | yes |
+
+So "any object can be taken apart" is false for off-the-shelf furniture
+catalogs: they ship one merged mesh per file. Two ways out — use `cutaway`
+(which needs no parts at all), or run the decomposition step that turns one
+mesh into named parts.
+
+The `--manifest` flag reads the dataset's `metadata.jsonl` instead of walking
+the tree API, which is rate-limited hard.

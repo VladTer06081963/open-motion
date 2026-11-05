@@ -10,6 +10,7 @@
     "fetch-assets": "node scripts/fetch-assets.mjs",
     "verify-assets": "node scripts/verify-assets.mjs",
     "smoke": "node scripts/render-smoke.mjs 0 3",
+    "inventory": "node scripts/glb-inventory.mjs",
     "render": "open-motion render -u http://localhost:5173 -o out.mp4 --composition glb-explode --public-dir ./public"
   },
   "dependencies": {
