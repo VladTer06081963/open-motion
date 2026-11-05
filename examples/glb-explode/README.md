@@ -17,9 +17,16 @@ pnpm --filter glb-explode build
 # verify the pinned asset bytes
 node examples/glb-explode/scripts/verify-assets.mjs
 
-# render a few frames to out/smoke/
-node examples/glb-explode/scripts/render-smoke.mjs 0 3
+# serve the built app
+npx http-server examples/glb-explode/dist -p 5173 -a 127.0.0.1 &
+
+# review loop: render a few frames, get one grid PNG
+node packages/cli/dist/bin.js frames -u http://127.0.0.1:5173 --at 0,30,60 \
+  -c glb-explode -o preview.png --public-dir examples/glb-explode/public
 ```
+
+The command prints the SHA-256 of every frame it rendered — the same digests
+twice mean the render is reproducible.
 
 ## The recipe is the API
 
@@ -56,12 +63,13 @@ Shared knobs: `lambda` (distance), `window` (time window per part), `delay`
 Rendering the same frame twice must produce the same bytes:
 
 ```bash
-node scripts/render-smoke.mjs 20 1 && sha256sum out/smoke/frame-00020.png
-node scripts/render-smoke.mjs 20 1 && sha256sum out/smoke/frame-00020.png
+open-motion frames -u http://localhost:5173 --at 20 -c glb-explode | grep sha256
+open-motion frames -u http://localhost:5173 --at 20 -c glb-explode | grep sha256
 ```
 
-Verified identical on the same machine. Cross-machine equality additionally
-requires the same Chromium build and the same GPU backend.
+Verified identical on the same machine (frame 20 → `6e0ce382…`, contact sheet
+→ `b853faed…`). Cross-machine equality additionally requires the same Chromium
+build and the same GPU backend.
 
 ## Files
 
@@ -75,3 +83,4 @@ requires the same Chromium build and the same GPU backend.
 | `scripts/render-smoke.mjs` | Headless render of a frame range |
 | `scripts/debug-scene.mjs` | Opens the page and reports console output, WebGL backend and scene stats |
 | `scripts/verify-assets.mjs` | Checks the manifest hashes |
+| `scripts/fetch-assets.mjs` | Downloads the assets from the manifest and verifies them |
