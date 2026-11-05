@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { encodeVideo, encodeGif, encodeWebP } from '@open-motion/encoder';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { Command } from 'commander';
 import cliProgress from 'cli-progress';
 import { execSync } from 'child_process';
@@ -355,6 +356,129 @@ export const runRender = async (options: {
   console.log(`Total time: ${durationSec}s`);
 };
 
+/**
+ * Renders a contact sheet: a grid of the given frames, laid out on one PNG.
+ *
+ * This is the feedback loop for an agent that authors scenes by data: render a
+ * handful of frames, look at one image, change the recipe, repeat. Building
+ * the sheet with the same browser that rendered the frames keeps the tool
+ * dependency-free — no image library required.
+ */
+export const runFrames = async (options: {
+  url: string;
+  out: string;
+  compositionId?: string;
+  frames: number[];
+  columns?: number;
+  width?: number;
+  height?: number;
+  fps?: number;
+  props?: string;
+  publicDir?: string;
+  chromiumPath?: string;
+  timeout?: number;
+}) => {
+  const timeout = options.timeout || parseInt(process.env.OPEN_MOTION_RENDER_TIMEOUT || '300000', 10);
+
+  if (options.chromiumPath) {
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = options.chromiumPath;
+  }
+
+  const inputProps = options.props ? JSON.parse(options.props) : {};
+  const compositions = await getCompositions(options.url, { inputProps, timeout }).catch(() => []);
+
+  let selectedComp: any = null;
+  if (options.compositionId) {
+    selectedComp = compositions.find((c: any) => c.id === options.compositionId);
+  } else {
+    selectedComp = compositions[0];
+  }
+
+  const config = {
+    width: options.width || selectedComp?.width || 1280,
+    height: options.height || selectedComp?.height || 720,
+    fps: options.fps || selectedComp?.fps || 30,
+    durationInFrames: selectedComp?.durationInFrames || 100
+  };
+
+  const frames = options.frames
+    .filter((f) => f >= 0 && f < config.durationInFrames)
+    .sort((a, b) => a - b);
+
+  if (frames.length === 0) {
+    console.error('No frames to render. Check --at and the composition duration.');
+    process.exit(1);
+  }
+
+  const tmpDir = path.join(process.cwd(), '.open-motion-tmp', 'frames');
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  console.log(`Rendering ${frames.length} frame(s) of "${selectedComp?.id || 'default'}" (${config.width}x${config.height})...`);
+
+  await renderFrames({
+    url: options.url,
+    config,
+    outputDir: tmpDir,
+    compositionId: selectedComp?.id,
+    inputProps,
+    concurrency: 1,
+    publicDir: options.publicDir ? path.join(process.cwd(), options.publicDir) : undefined,
+    timeout,
+    frames
+  });
+
+  const cells = frames.map((frame) => {
+    const file = path.join(tmpDir, `frame-${frame.toString().padStart(5, '0')}.png`);
+    if (!fs.existsSync(file)) {
+      return null;
+    }
+    const bytes = fs.readFileSync(file);
+    return {
+      frame,
+      dataUri: `data:image/png;base64,${bytes.toString('base64')}`,
+      sha256: crypto.createHash('sha256').update(bytes).digest('hex')
+    };
+  }).filter(Boolean) as { frame: number; dataUri: string; sha256: string }[];
+
+  console.log('\nFrame digests:');
+  for (const cell of cells) {
+    console.log(`  frame ${String(cell.frame).padStart(5)}  sha256 ${cell.sha256}`);
+  }
+
+  const columns = Math.max(1, options.columns || Math.min(3, cells.length));
+  const cellWidth = 480;
+  const cellHeight = Math.round((cellWidth * config.height) / config.width);
+  const labelHeight = 28;
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  body { margin: 0; background: #11131a; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: #cbd5e1; }
+  .grid { display: grid; grid-template-columns: repeat(${columns}, ${cellWidth}px); gap: 12px; padding: 12px; }
+  figure { margin: 0; }
+  img { display: block; width: ${cellWidth}px; height: ${cellHeight}px; border: 1px solid #2b3245; }
+  figcaption { padding-top: 6px; color: #94a3b8; }
+</style></head><body>
+<div class="grid">
+${cells.map((cell) => `  <figure><img src="${cell.dataUri}" /><figcaption>frame ${cell.frame}</figcaption></figure>`).join('\n')}
+</div>
+</body></html>`;
+
+  const browser = await chromium.launch({
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+    args: ['--disable-dev-shm-usage', '--disable-setuid-sandbox', '--no-sandbox']
+  });
+  const page = await browser.newPage({
+    viewport: { width: columns * cellWidth + (columns + 1) * 12, height: 800 }
+  });
+  await page.setContent(html);
+  await page.waitForLoadState('networkidle');
+  fs.mkdirSync(path.dirname(path.resolve(options.out)), { recursive: true });
+  await page.screenshot({ path: path.resolve(options.out), type: 'png', fullPage: true });
+  await browser.close();
+
+  console.log(`\nContact sheet written to ${options.out}`);
+};
+
 // Read package.json version
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
 
@@ -434,6 +558,53 @@ Examples:
   $ open-motion render -u http://localhost:5173 -o out.mp4
   $ open-motion render -u http://localhost:5173 -o out.mp4 --composition main --concurrency 4
   $ open-motion render -u http://localhost:3000 -o banner.gif --format gif --width 1200 --height 630
+`);
+
+  const framesCommand = program
+    .command('frames')
+    .description('Render selected frames and write them as one contact sheet PNG')
+    .requiredOption('-u, --url <url>', 'URL of the OpenMotion app')
+    .requiredOption('--at <frames>', 'Comma-separated frame numbers, e.g. 0,30,60')
+    .option('-o, --out <path>', 'Output PNG path', './preview.png')
+    .option('-c, --composition <id>', 'ID of the composition')
+    .option('-p, --props <json>', 'JSON string of props to pass to the composition')
+    .option('--columns <number>', 'Number of columns in the sheet', parseInt)
+    .option('--width <number>', 'Override width', parseInt)
+    .option('--height <number>', 'Override height', parseInt)
+    .option('--fps <number>', 'Override FPS', parseInt)
+    .option('--public-dir <path>', 'Public directory path for static assets (default: "./public")')
+    .option('--chromium-path <path>', 'Custom path to Chromium executable')
+    .option('--timeout <number>', 'Timeout for browser operations in milliseconds', parseInt)
+    .action(async (options) => {
+      try {
+        const frames = options.at
+          .split(',')
+          .map((f: string) => parseInt(f.trim(), 10))
+          .filter((f: number) => !isNaN(f));
+        await runFrames({
+          url: options.url,
+          out: options.out,
+          compositionId: options.composition,
+          frames,
+          columns: options.columns,
+          width: options.width,
+          height: options.height,
+          fps: options.fps,
+          props: options.props,
+          publicDir: options.publicDir,
+          chromiumPath: options.chromiumPath,
+          timeout: options.timeout
+        });
+      } catch (err) {
+        console.error('Frames failed:', err);
+        process.exit(1);
+      }
+    });
+
+  framesCommand.addHelpText('after', `
+Examples:
+  $ open-motion frames -u http://localhost:5173 --at 0,30,60 -o preview.png
+  $ open-motion frames -u http://localhost:5173 --at 0,15,30,45 -c glb-explode --columns 4
 `);
 
   program.parse(process.argv);

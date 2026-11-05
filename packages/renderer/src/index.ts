@@ -73,6 +73,11 @@ export interface RenderOptions {
   onProgress?: (frame: number) => void;
   publicDir?: string;
   timeout?: number;
+  /**
+   * Render only these frames instead of the whole range. Useful for
+   * preview grids: an agent wants to look at a few frames, not the video.
+   */
+  frames?: number[];
 }
 
 export interface GetCompositionsOptions {
@@ -124,15 +129,26 @@ export const getCompositions = async (url: string, options: GetCompositionsOptio
   return processedCompositions;
 };
 
-export const renderFrames = async ({ url, config, outputDir, compositionId, inputProps = {}, concurrency = 1, publicDir, onProgress, timeout = 300000 }: RenderOptions) => {
+export const renderFrames = async ({ url, config, outputDir, compositionId, inputProps = {}, concurrency = 1, publicDir, onProgress, timeout = 300000, frames }: RenderOptions) => {
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
-  const framesPerWorker = Math.ceil(config.durationInFrames / concurrency);
+  // When an explicit frame list is given, the work is split by list position
+  // rather than by a contiguous range.
+  const requestedFrames = frames && frames.length > 0
+    ? frames.slice().sort((a, b) => a - b)
+    : null;
+
+  const framesPerWorker = requestedFrames
+    ? Math.ceil(requestedFrames.length / concurrency)
+    : Math.ceil(config.durationInFrames / concurrency);
   let totalFramesRendered = 0;
 
   const renderBatch = async (startFrame: number, endFrame: number, workerId: number) => {
+    const batchFrames: number[] = requestedFrames
+      ? requestedFrames.slice(startFrame, endFrame + 1)
+      : [];
     const browser = await chromium.launch({
       executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
       args: ['--disable-dev-shm-usage', '--disable-setuid-sandbox', '--no-sandbox']
@@ -149,8 +165,14 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
     const workerAudioAssets: any[] = [];
     const videoCache = new Map<string, string>(); // Path to local resolved path
 
-    for (let i = startFrame; i <= endFrame && i < config.durationInFrames; i++) {
-      if (i === startFrame) {
+    const framesToRender = requestedFrames
+      ? batchFrames
+      : Array.from({ length: Math.max(0, endFrame - startFrame + 1) }, (_, k) => startFrame + k)
+        .filter((f) => f < config.durationInFrames);
+
+    for (let frameIndex = 0; frameIndex < framesToRender.length; frameIndex++) {
+      const i = framesToRender[frameIndex];
+      if (frameIndex === 0) {
         await page.addInitScript(({ frame, fps, hijackScript, compositionId, inputProps }) => {
           (window as any).__OPEN_MOTION_FRAME__ = frame;
           (window as any).__OPEN_MOTION_COMPOSITION_ID__ = compositionId;
@@ -200,7 +222,7 @@ export const renderFrames = async ({ url, config, outputDir, compositionId, inpu
       }, { timeout });
 
       // Only wait for networkidle on the first frame to avoid hanging on persistent requests
-      if (i === startFrame) {
+      if (frameIndex === 0) {
         await page.waitForLoadState('networkidle');
       }
 
